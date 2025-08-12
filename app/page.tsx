@@ -1,6 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { subscribeTable } from "@/lib/realtime"
+import { sessionCode } from "@/lib/appConfig"
 
 type QueueItem = {
   spotifyId: string
@@ -60,13 +62,45 @@ export default function Page() {
   }, [])
 
   useEffect(() => {
+    // Initial laden
     fetchNow()
     fetchQueue()
-    const t = setInterval(() => {
-      fetchNow()
-      fetchQueue()
-    }, 4000)
-    return () => clearInterval(t)
+
+    // Realtime-Subscriptions
+    let unsubQueue = () => {}
+    let unsubNow = () => {}
+
+    try {
+      unsubQueue = subscribeTable({
+        table: "queue",
+        event: "*",
+        filter: `session_code=eq.${sessionCode()}`,
+        onEvent: () => {
+          fetchQueue()
+        },
+      })
+
+      unsubNow = subscribeTable({
+        table: "now_playing",
+        event: "*",
+        filter: `session_code=eq.${sessionCode()}`,
+        onEvent: () => {
+          fetchNow()
+        },
+      })
+    } catch (e) {
+      console.warn("[realtime] subscribe failed — fallback to polling", e)
+      const t = setInterval(() => {
+        fetchNow()
+        fetchQueue()
+      }, 4000)
+      return () => clearInterval(t)
+    }
+
+    return () => {
+      unsubQueue()
+      unsubNow()
+    }
   }, [fetchNow, fetchQueue])
 
   async function submitWish() {
