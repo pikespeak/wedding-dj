@@ -427,6 +427,15 @@ export default function Page() {
                 className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 outline-none focus:border-zinc-500"
               />
               <button
+                onClick={async () => {
+                  await fetch("/api/spotify/sync-now-playing", { method: "POST" })
+                  await fetchNow()
+                }}
+                className="mt-2 w-full rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+              >
+                Von Spotify übernehmen
+              </button>
+              <button
                 onClick={adminTransfer}
                 className="mt-2 w-full rounded-xl border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800"
               >
