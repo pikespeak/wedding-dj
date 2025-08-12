@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server"
 import { getAdminSupabase } from "@/lib/supabase.server"
 import { sessionCode } from "@/lib/appConfig"
-import { searchTrack } from "@/lib/spotify.search"
+import crypto from "crypto"
 
 const SALT = process.env.ADMIN_PIN || "salt"
-import crypto from "crypto"
 function ipHash(ip: string){ return crypto.createHash("sha256").update(`${ip}:${SALT}`).digest("hex").slice(0,32) }
 
 export async function POST(req: Request) {
@@ -45,11 +44,16 @@ export async function POST(req: Request) {
     .single()
   if (ins.error) return NextResponse.json({ error: ins.error.message }, { status: 500 })
 
-  // Optional: gleich Spotify-Suche anstoßen (Top-Kandidat nur als Hinweis; Entscheidung im Admin)
-  try {
-    const suggestion = await searchTrack(text)
-    return NextResponse.json({ ok: true, request: ins.data, suggestion })
-  } catch {
-    return NextResponse.json({ ok: true, request: ins.data })
-  }
+  // Fire-and-forget: AI-Resolver im Hintergrund
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
+  fetch(`${baseUrl}/api/dj/resolve-task`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: ins.data.id }),
+    // keepalive hilft im Edge/FaaS-Umfeld, ist aber optional
+    keepalive: true,
+  }).catch(() => {})
+
+  // Sofort antworten – UI bleibt schnell
+  return NextResponse.json({ ok: true, request: ins.data })
 }
