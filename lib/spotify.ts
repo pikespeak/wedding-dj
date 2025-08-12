@@ -140,3 +140,17 @@ export async function nextTrack() {
   await spotifyFetch(`/me/player/next`, { method: "POST" })
   return { ok: true }
 }
+
+export async function currentPlayback() {
+  // /v1/me/player liefert 204, wenn nichts läuft
+  try {
+    // wir nutzen spotifyFetch; es gibt bei 204 ein leeres Objekt zurück ({}).
+    const data = await spotifyFetch<any>("/me/player", { method: "GET" })
+    if (!data || (typeof data === "object" && Object.keys(data).length === 0)) {
+      return null
+    }
+    return data
+  } catch (e) {
+    throw e
+  }
+}

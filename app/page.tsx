@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { subscribeTable } from "@/lib/realtime"
 import { sessionCode } from "@/lib/appConfig"
 import { getSupabase } from "@/lib/supabase"
@@ -24,6 +24,7 @@ type NowPlaying = {
 }
 
 export default function Page() {
+  const clientIdRef = useRef<string>(Math.random().toString(36).slice(2))
   const [now, setNow] = useState<NowPlaying | null>(null)
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -154,6 +155,28 @@ export default function Page() {
       unsubVotes()
     }
   }, [fetchNow, fetchQueue, fetchVotesSummary])
+
+  // Leader-Polling: genau ein Client sync't Spotify→DB alle 4s
+  useEffect(() => {
+    const t = setInterval(async () => {
+      try {
+        const claim = await fetch("/api/sync/leader", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ owner: clientIdRef.current }),
+        })
+        const j = await claim.json().catch(() => ({}))
+        if (j?.leader) {
+          await fetch("/api/spotify/sync-now-playing", { method: "POST" })
+          // nach erfolgreichem Sync Now-Playing lokal aktualisieren
+          await fetchNow()
+        }
+      } catch {
+        // still silent
+      }
+    }, 4000)
+    return () => clearInterval(t)
+  }, [fetchNow])
 
   async function submitWish() {
     if (!wish.trim()) return
