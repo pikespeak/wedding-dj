@@ -229,18 +229,18 @@ export default function Page() {
             </span>
           </div>
           <div className="flex items-center gap-3">
-            {!isAdmin ? (
-              <button
-                onClick={() => setAdminOpen((v) => !v)}
-                className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800"
-              >
-                Admin
-              </button>
-            ) : (
-              <span className="rounded-lg border border-emerald-700 bg-emerald-900/30 px-3 py-1.5 text-sm text-emerald-300">
-                Admin aktiv
-              </span>
-            )}
+            <button
+              onClick={() => setAdminOpen((v) => !v)}
+              className={
+                isAdmin
+                  ? "rounded-lg border border-emerald-700 bg-emerald-900/30 px-3 py-1.5 text-sm text-emerald-300 hover:bg-emerald-900/40"
+                  : "rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800"
+              }
+              aria-pressed={adminOpen}
+              aria-label="Admin Menü öffnen"
+            >
+              {isAdmin ? "Admin aktiv" : "Admin"}
+            </button>
           </div>
         </div>
       </header>
@@ -404,6 +404,14 @@ export default function Page() {
                   className="flex-1 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500"
                 >
                   » Skip
+                </button>
+              </div>
+              <div className="mt-2 text-right">
+                <button
+                  onClick={() => setIsAdmin(false)}
+                  className="rounded-lg border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800"
+                >
+                  Abmelden
                 </button>
               </div>
             </div>
