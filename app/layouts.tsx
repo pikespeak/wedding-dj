@@ -6,7 +6,11 @@ export const metadata: Metadata = {
   description: "Interaktive DJ-App für unsere Hochzeit",
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
   return (
     <html lang="de">
       <body className="min-h-screen bg-zinc-900 text-zinc-100">
