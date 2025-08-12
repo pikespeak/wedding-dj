@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🎶 Wedding DJ App
 
-## Getting Started
+Eine interaktive DJ- und Musikwunsch-App für unsere Hochzeit, optimiert für iPads und Echtzeitsteuerung via Spotify.  
+Gäste können Musikwünsche eingeben, Songs liken oder disliken, und die Playlist passt sich automatisch an Stimmung, Uhrzeit und Gästedemografie an.  
+Das Admin-Interface erlaubt die direkte Steuerung der Spotify-Wiedergabe.
 
-First, run the development server:
+---
 
+## 🚀 Features (MVP-0)
+- **Now Playing** – aktueller Song mit Cover, Titel, Artist & Restlaufzeit
+- **Musikwunsch-System** – Gäste geben Wünsche ein, optional mit Kommentar
+- **Likes/Dislikes** – beeinflussen zukünftige Songauswahl (ohne Song zu unterbrechen)
+- **Queue-Übersicht** – nächste Titel mit Begründung
+- **Admin-Drawer** – Phase umschalten, Device auswählen, Skip/Play/Pause
+- **Realtime Sync** – mehrere Tablets sehen immer den gleichen Status
+
+---
+
+## 🛠 Tech-Stack
+- **[Next.js](https://nextjs.org/)** mit App Router
+- **[Tailwind CSS](https://tailwindcss.com/)** für schnelles, responsives Styling
+- **[Supabase](https://supabase.com/)** für Datenbank, Auth & Realtime
+- **[Spotify Web API](https://developer.spotify.com/documentation/web-api/)** für Musikwiedergabe
+- **[Vercel](https://vercel.com/)** für Hosting & Deployment
+
+---
+
+## 📦 Installation
+
+### 1. Repository klonen
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+git clone <REPO_URL>
+cd wedding-dj
