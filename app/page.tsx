@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 
 type QueueItem = {
   spotifyId: string
-  title: string
-  artist: string
+  title?: string
+  artist?: string
   score?: number
   reason?: string
 }
@@ -73,7 +73,6 @@ export default function Page() {
     if (!wish.trim()) return
     setLoading(true)
     try {
-      // Für den Dummy senden wir nur eine pseudo-spotifyId
       const payload = { spotifyId: wish.trim(), note: "guest wish" }
       const res = await fetch("/api/request", {
         method: "POST",
@@ -113,7 +112,6 @@ export default function Page() {
   }
   async function adminSkip() {
     await fetch("/api/admin/skip", { method: "POST" })
-    // optimistic refresh
     fetchNow()
     fetchQueue()
   }
@@ -126,10 +124,7 @@ export default function Page() {
   }
 
   function tryAdminLogin() {
-    if (adminPin === process.env.NEXT_PUBLIC_FAKE_ADMIN_PIN /* not used */) {
-      // Hinweis: in echt NICHT clientseitig prüfen – nur serverseitig!
-    }
-    // Für MVP: simple, lokale "Freischaltung"
+    // MVP: simple clientseitige Demo-PIN. Später serverseitig prüfen!
     if (adminPin === "2046") setIsAdmin(true)
   }
 
@@ -219,7 +214,7 @@ export default function Page() {
             </button>
           </div>
           <div className="mt-3 text-xs text-zinc-500">
-            Tipp: In dieser MVP‑Demo wird der eingegebene Text als <code>spotifyId</code> gesendet.
+            Hinweis: In dieser Demo wird der Text als <code>spotifyId</code> gesendet.
           </div>
         </section>
 
@@ -247,7 +242,7 @@ export default function Page() {
         </section>
       </div>
 
-      {/* Admin Drawer (simpel) */}
+      {/* Admin Drawer */}
       <div
         className={`fixed right-0 top-0 h-full w-full max-w-sm transform border-l border-zinc-800 bg-zinc-950 p-5 shadow-2xl transition-transform duration-200 ${
           adminOpen ? "translate-x-0" : "translate-x-full"
@@ -280,7 +275,7 @@ export default function Page() {
               Anmelden
             </button>
             <p className="text-xs text-zinc-500">
-              Hinweis: In der MVP‑Demo wird die PIN **clientseitig** geprüft. Später nur serverseitig!
+              Hinweis: In der MVP‑Demo wird die PIN clientseitig geprüft. Später nur serverseitig!
             </p>
           </div>
         ) : (
@@ -323,7 +318,7 @@ export default function Page() {
                 Auf dieses Gerät übertragen
               </button>
               <p className="mt-1 text-xs text-zinc-500">
-                In echt würdest du hier verfügbare Geräte **listen** und auswählen.
+                In echt würdest du hier verfügbare Geräte listen und auswählen.
               </p>
             </div>
           </div>
