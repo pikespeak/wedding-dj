@@ -214,7 +214,10 @@ export default function Page() {
   }
 
   function tryAdminLogin() {
-    if (adminPin === "2046") setIsAdmin(true)
+    if (adminPin === "2046") {
+      setIsAdmin(true)
+      setAdminPin("") // PIN-Feld nach erfolgreichem Login leeren
+    }
   }
 
   return (
@@ -430,6 +433,44 @@ export default function Page() {
                 Auf dieses Gerät übertragen
               </button>
               <p className="mt-1 text-xs text-zinc-500">In echt würdest du hier verfügbare Geräte listen und auswählen.</p>
+              <div className="mt-4 space-y-2">
+                <div className="text-sm text-zinc-300">Spotify-Status</div>
+                <div className="flex items-center gap-2 text-sm">
+                  <button
+                    onClick={async () => {
+                      const r = await fetch("/api/spotify/status", { cache: "no-store" })
+                      const j = await r.json().catch(() => ({}))
+                      alert(j.connected ? "Verbunden mit Spotify" : "Nicht verbunden – bitte einloggen")
+                    }}
+                    className="rounded-lg border border-zinc-700 px-3 py-1.5 hover:bg-zinc-800"
+                  >
+                    Status prüfen
+                  </button>
+                  <a
+                    href="/api/spotify/login"
+                    className="rounded-lg border border-indigo-700 bg-indigo-900/30 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/40"
+                  >
+                    Spotify verbinden
+                  </a>
+                </div>
+
+                <div className="text-sm text-zinc-300">Geräte laden</div>
+                <button
+                  onClick={async () => {
+                    const r = await fetch("/api/spotify/devices", { cache: "no-store" })
+                    const j = await r.json().catch(() => ({} as any))
+                    if (j?.devices?.length) {
+                      const names = j.devices.map((d: any) => `${d.name} (${d.id})${d.is_active ? " • aktiv" : ""}`).join("\n")
+                      alert(`Gefundene Geräte:\n\n${names}\n\nTipp: Kopiere die gewünschte ID ins Feld oben.`)
+                    } else {
+                      alert("Keine Geräte gefunden. Öffne Spotify auf dem Zielgerät und probiere es erneut.")
+                    }
+                  }}
+                  className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800"
+                >
+                  Geräte abfragen
+                </button>
+              </div>
             </div>
           </div>
         )}
