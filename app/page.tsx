@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { subscribeTable } from "@/lib/realtime"
 import { sessionCode } from "@/lib/appConfig"
+import { getSupabase } from "@/lib/supabase"
 
 type QueueItem = {
   spotifyId: string
@@ -28,6 +29,9 @@ export default function Page() {
 
   const [wish, setWish] = useState("")
   const [likeBusy, setLikeBusy] = useState<null | "up" | "down">(null)
+
+  const [likes, setLikes] = useState(0)
+  const [dislikes, setDislikes] = useState(0)
 
   // Admin
   const [adminOpen, setAdminOpen] = useState(false)
@@ -61,14 +65,52 @@ export default function Page() {
     }
   }, [])
 
+  const fetchVotesSummary = useCallback(async () => {
+    try {
+      const supa = getSupabase()
+      if (!supa) return
+
+      // aktuellen Track aus "now" nehmen; wenn nicht vorhanden, neu laden
+      let trackId = now?.track_spotify_id
+      if (!trackId) {
+        const res = await fetch("/api/now-playing", { cache: "no-store" })
+        if (res.ok) {
+          const j = await res.json()
+          if (j && j.track_spotify_id) trackId = j.track_spotify_id
+        }
+      }
+      if (!trackId) {
+        setLikes(0)
+        setDislikes(0)
+        return
+      }
+
+      const base = supa.from("votes").select("id", { count: "exact", head: true })
+        .eq("session_code", sessionCode())
+        .eq("track_spotify_id", trackId)
+
+      const [likeRes, dislikeRes] = await Promise.all([
+        base.eq("value", 1),
+        base.eq("value", -1),
+      ])
+
+      setLikes(likeRes.count ?? 0)
+      setDislikes(dislikeRes.count ?? 0)
+    } catch (e) {
+      console.warn("[votes] summary failed", e)
+    }
+  }, [now])
+
   useEffect(() => {
     // Initial laden
     fetchNow()
     fetchQueue()
+    fetchVotesSummary()
 
     // Realtime-Subscriptions
     let unsubQueue = () => {}
     let unsubNow = () => {}
+    let unsubVotes = () => {}
 
     try {
       unsubQueue = subscribeTable({
@@ -86,6 +128,16 @@ export default function Page() {
         filter: `session_code=eq.${sessionCode()}`,
         onEvent: () => {
           fetchNow()
+          fetchVotesSummary()
+        },
+      })
+
+      unsubVotes = subscribeTable({
+        table: "votes",
+        event: "*",
+        filter: `session_code=eq.${sessionCode()}`,
+        onEvent: () => {
+          fetchVotesSummary()
         },
       })
     } catch (e) {
@@ -93,6 +145,7 @@ export default function Page() {
       const t = setInterval(() => {
         fetchNow()
         fetchQueue()
+        fetchVotesSummary()
       }, 4000)
       return () => clearInterval(t)
     }
@@ -100,8 +153,9 @@ export default function Page() {
     return () => {
       unsubQueue()
       unsubNow()
+      unsubVotes()
     }
-  }, [fetchNow, fetchQueue])
+  }, [fetchNow, fetchQueue, fetchVotesSummary])
 
   async function submitWish() {
     if (!wish.trim()) return
@@ -127,6 +181,10 @@ export default function Page() {
   async function vote(value: 1 | -1) {
     setLikeBusy(value === 1 ? "up" : "down")
     try {
+      // Optimistic update
+      if (value === 1) setLikes((n) => n + 1)
+      else setDislikes((n) => n + 1)
+
       await fetch("/api/vote", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -224,6 +282,10 @@ export default function Page() {
           ) : (
             <div className="text-zinc-400">Keine Wiedergabe erkannt.</div>
           )}
+          <div className="mt-1 text-right text-xs text-zinc-400">
+            <span className="mr-2">👍 {likes}</span>
+            <span>👎 {dislikes}</span>
+          </div>
           <p className="mt-3 text-xs text-zinc-500">
             Dislikes unterbrechen den aktuellen Song nicht – sie beeinflussen nur zukünftige Auswahl.
           </p>
