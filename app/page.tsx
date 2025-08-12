@@ -42,6 +42,47 @@ export default function Page() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [deviceId, setDeviceId] = useState("device-demo-1")
 
+  // Admin UI types and state
+  type UiPlaylist = { id: string; name: string }
+  type WishItem = { id: string; text: string; guest_name?: string | null; created_at: string; title?: string | null; artist?: string | null; ai_confidence?: number | null }
+
+  const [playlists, setPlaylists] = useState<UiPlaylist[]>([])
+  const [selectedPlaylist, setSelectedPlaylist] = useState<string>("")
+  const [plLoading, setPlLoading] = useState(false)
+
+  const [pending, setPending] = useState<WishItem[]>([])
+  const [pendingBusy, setPendingBusy] = useState<string | null>(null)
+  const fetchPlaylists = useCallback(async () => {
+    try {
+      setPlLoading(true)
+      const res = await fetch("/api/spotify/playlists", { cache: "no-store" })
+      const j = await res.json().catch(() => ({}))
+      if (res.ok && Array.isArray(j.items)) {
+        setPlaylists(j.items as UiPlaylist[])
+        // falls ausgewählte Playlist nicht mehr existiert → leeren
+        if (selectedPlaylist && !(j.items as UiPlaylist[]).some((p) => p.id === selectedPlaylist)) {
+          setSelectedPlaylist("")
+        }
+      }
+    } catch (e) {
+      console.warn("[spotify] playlists", e)
+    } finally {
+      setPlLoading(false)
+    }
+  }, [selectedPlaylist])
+
+  const fetchPendingRequests = useCallback(async () => {
+    try {
+      const r = await fetch("/api/admin/requests/pending", { cache: "no-store" })
+      if (r.ok) {
+        const j = await r.json()
+        setPending(Array.isArray(j.items) ? (j.items as WishItem[]) : [])
+      }
+    } catch (e) {
+      console.warn("[requests] pending", e)
+    }
+  }, [])
+
   const remaining = useMemo(() => {
     if (!now) return ""
     const sec = Math.max(0, Math.floor(now.remaining_ms / 1000))
@@ -108,11 +149,13 @@ export default function Page() {
     fetchNow()
     fetchQueue()
     fetchVotesSummary()
+    fetchPendingRequests()
 
     // Realtime subscriptions
     let unsubQueue = () => {}
     let unsubNow = () => {}
     let unsubVotes = () => {}
+    let unsubRequests = () => {}
 
     try {
       unsubQueue = subscribeTable({
@@ -142,6 +185,15 @@ export default function Page() {
           fetchVotesSummary()
         },
       })
+
+      unsubRequests = subscribeTable({
+        table: "requests",
+        event: "*",
+        filter: `session_code=eq.${sessionCode()}`,
+        onEvent: () => {
+          fetchPendingRequests()
+        },
+      })
     } catch (e) {
       console.warn("[realtime] subscribe failed — fallback to polling", e)
       const t = setInterval(() => {
@@ -156,8 +208,42 @@ export default function Page() {
       unsubQueue()
       unsubNow()
       unsubVotes()
+      unsubRequests()
     }
-  }, [fetchNow, fetchQueue, fetchVotesSummary])
+  }, [fetchNow, fetchQueue, fetchVotesSummary, fetchPendingRequests])
+  useEffect(() => {
+    if (isAdmin && adminOpen) {
+      fetchPlaylists()
+    }
+  }, [isAdmin, adminOpen, fetchPlaylists])
+  async function adminResolveWish(w: WishItem) {
+    try {
+      setPendingBusy(w.id)
+      await fetch("/api/admin/requests/resolve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: w.id, query: w.text, playlistId: selectedPlaylist || undefined }),
+      })
+      await fetchPendingRequests()
+      await fetchQueue()
+    } finally {
+      setPendingBusy(null)
+    }
+  }
+
+  async function adminRejectWish(w: WishItem) {
+    try {
+      setPendingBusy(w.id)
+      await fetch("/api/admin/requests/reject", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: w.id }),
+      })
+      await fetchPendingRequests()
+    } finally {
+      setPendingBusy(null)
+    }
+  }
 
   // Leader-Polling: genau ein Client sync't Spotify→DB alle 4s
   useEffect(() => {
@@ -444,7 +530,8 @@ function tryAdminLogin() {
             </p>
           </div>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-6">
+            {/* Playback Controls */}
             <div>
               <div className="mb-2 text-sm text-zinc-300">Wiedergabe</div>
               <div className="flex gap-2">
@@ -476,27 +563,91 @@ function tryAdminLogin() {
                 </button>
               </div>
             </div>
-          <div className="mt-5">
-                <div className="mb-2 text-sm text-zinc-300">Votes</div>
-                <button
-                  onClick={adminResetVotes}
-                  className="w-full rounded-xl border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800"
-                >
-                  Votes zurücksetzen (aktueller Track)
-                </button>
-                <p className="mt-1 text-xs text-zinc-500">Setzt alle 👍/👎 für den gerade laufenden Track auf 0.</p>
-              </div>
-              <div className="mt-3">
+
+            {/* Votes */}
+            <div>
+              <div className="mb-2 text-sm text-zinc-300">Votes</div>
+              <button
+                onClick={adminResetVotes}
+                className="w-full rounded-xl border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800"
+              >
+                Votes zurücksetzen (aktueller Track)
+              </button>
               <button
                 onClick={adminResetAllVotes}
-                className="w-full rounded-xl border border-rose-700 px-3 py-2 text-sm hover:bg-rose-900/20 text-rose-300"
+                className="mt-2 w-full rounded-xl border border-rose-700 px-3 py-2 text-sm hover:bg-rose-900/20 text-rose-300"
               >
                 Alle Votes der Session löschen
               </button>
-              <p className="mt-1 text-xs text-zinc-500">
-                Löscht sämtliche 👍/👎 der aktuellen Session (alle Tracks).
-              </p>
+              <p className="mt-1 text-xs text-zinc-500">Setzt alle 👍/👎 entweder für den aktuellen Track oder die gesamte Session zurück.</p>
             </div>
+
+            {/* Ziel-Playlist */}
+            <div>
+              <div className="mb-1 text-sm text-zinc-300">Ziel‑Playlist</div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={selectedPlaylist}
+                  onChange={(e) => setSelectedPlaylist(e.target.value)}
+                  className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
+                >
+                  <option value="">— Keine —</option>
+                  {playlists.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={fetchPlaylists}
+                  disabled={plLoading}
+                  className="rounded-lg border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  {plLoading ? "Lädt…" : "Aktualisieren"}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-zinc-500">Wenn gesetzt, werden genehmigte Wünsche beim Übernehmen in diese Playlist hinzugefügt.</p>
+            </div>
+
+            {/* Wünsche (offen) */}
+            <div>
+              <div className="mb-2 text-sm font-semibold text-zinc-200">Wünsche (offen)</div>
+              {pending.length === 0 ? (
+                <div className="text-sm text-zinc-500">Keine offenen Wünsche.</div>
+              ) : (
+                <ul className="divide-y divide-zinc-800">
+                  {pending.map((w) => (
+                    <li key={w.id} className="py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm">{w.text}</div>
+                          <div className="text-xs text-zinc-500">{w.guest_name || "Anonym"} • {new Date(w.created_at).toLocaleTimeString()}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => adminResolveWish(w)}
+                            disabled={pendingBusy === w.id}
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500 disabled:opacity-50"
+                          >
+                            Übernehmen{selectedPlaylist ? " + Playlist" : ""}
+                          </button>
+                          <button
+                            onClick={() => adminRejectWish(w)}
+                            disabled={pendingBusy === w.id}
+                            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800 disabled:opacity-50"
+                          >
+                            Ablehnen
+                          </button>
+                        </div>
+                      </div>
+                      {typeof w.ai_confidence === "number" && (
+                        <div className="mt-1 text-xs text-zinc-500">AI‑Confidence: {(w.ai_confidence * 100).toFixed(0)}%</div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {/* Spotify Geräte & Login */}
             <div>
               <div className="mb-2 text-sm text-zinc-300">Spotify‑Device (Demo)</div>
               <input

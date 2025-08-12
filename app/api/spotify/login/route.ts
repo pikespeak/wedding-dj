@@ -1,12 +1,9 @@
+// app/api/spotify/login/route.ts
 import { NextResponse } from "next/server"
-import { authorizeUrl } from "@/lib/spotify"
+import { getSpotifyAuthUrl } from "@/lib/spotify"
 
 export async function GET() {
-  const scopes = [
-    "user-read-playback-state",
-    "user-modify-playback-state",
-    "user-read-currently-playing",
-  ]
-  const url = authorizeUrl(scopes)
-  return NextResponse.redirect(url)
+  // Schlicht: leite den Browser zur Spotify-Consent-Seite
+  const url = getSpotifyAuthUrl()
+  return NextResponse.redirect(url, { status: 302 })
 }
