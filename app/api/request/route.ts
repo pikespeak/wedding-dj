@@ -1,64 +1,55 @@
 import { NextResponse } from "next/server"
 import { getAdminSupabase } from "@/lib/supabase.server"
 import { sessionCode } from "@/lib/appConfig"
+import { searchTrack } from "@/lib/spotify.search"
+
+const SALT = process.env.ADMIN_PIN || "salt"
+import crypto from "crypto"
+function ipHash(ip: string){ return crypto.createHash("sha256").update(`${ip}:${SALT}`).digest("hex").slice(0,32) }
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({}))
-  const spotifyId = String(body?.spotifyId || "").trim()
-  const note = (body?.note ?? "").toString().slice(0, 200)
-
-  if (!spotifyId) {
-    return NextResponse.json({ error: "spotifyId required" }, { status: 400 })
-  }
   const supa = getAdminSupabase()
   if (!supa) return NextResponse.json({ error: "supabase not configured" }, { status: 500 })
 
-  // 0) Existiert schon in Queue?
-  const { data: exists, error: exErr } = await supa
-    .from("queue")
-    .select("id")
-    .eq("session_code", sessionCode())
-    .eq("spotify_id", spotifyId)
-    .limit(1)
+  const body = await req.json().catch(() => ({} as any))
+  const text = (body?.text || body?.spotifyId || "").toString().trim()
+  const guest = (body?.guest || "").toString().trim() || null
 
-  if (exErr) {
-    console.error("[queue.exists]", exErr)
-    return NextResponse.json({ error: "queue check failed" }, { status: 500 })
-  }
-  if (exists && exists.length > 0) {
-    return NextResponse.json({ status: "duplicate_ignored", spotifyId }, { status: 200 })
-  }
+  if (!text) return NextResponse.json({ error: "missing text" }, { status: 400 })
 
-  // 1) Request speichern
-  const reqIns = await supa
+  // simples Rate-Limit: max 3 Wünsche in 5 Minuten pro IP/Session
+  const ip = (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "0.0.0.0"
+  const hash = ipHash(ip)
+  const since = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+  const recent = await supa
     .from("requests")
-    .insert({ session_code: sessionCode(), spotify_id: spotifyId, note })
-    .select()
-    .single()
-
-  if (reqIns.error) {
-    console.error("[request.insert]", reqIns.error)
-    return NextResponse.json({ error: "insert request failed" }, { status: 500 })
+    .select("id", { count: "exact", head: true })
+    .eq("session_code", sessionCode())
+    .eq("ip_hash", hash)
+    .gte("created_at", since)
+  if ((recent.count ?? 0) >= 3) {
+    return NextResponse.json({ error: "rate_limited" }, { status: 429 })
   }
 
-  // 2) In Queue hängen
-  const qIns = await supa
-    .from("queue")
+  // Wunsch speichern (zunächst pending)
+  const ins = await supa
+    .from("requests")
     .insert({
       session_code: sessionCode(),
-      spotify_id: spotifyId,
-      title: null,
-      artist: null,
-      score: 0,
-      reason: "guest request",
+      guest_name: guest,
+      text,
+      ip_hash: hash,
+      status: "pending",
     })
     .select()
     .single()
+  if (ins.error) return NextResponse.json({ error: ins.error.message }, { status: 500 })
 
-  if (qIns.error) {
-    console.error("[queue.insert]", qIns.error)
-    // nicht fatal – request existiert
+  // Optional: gleich Spotify-Suche anstoßen (Top-Kandidat nur als Hinweis; Entscheidung im Admin)
+  try {
+    const suggestion = await searchTrack(text)
+    return NextResponse.json({ ok: true, request: ins.data, suggestion })
+  } catch {
+    return NextResponse.json({ ok: true, request: ins.data })
   }
-
-  return NextResponse.json({ status: "queued", request: reqIns.data, queue: qIns.data }, { status: 201 })
 }

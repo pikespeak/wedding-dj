@@ -1,31 +1,40 @@
 import { NextResponse } from "next/server"
 import { getAdminSupabase } from "@/lib/supabase.server"
+import { sessionCode } from "@/lib/appConfig"
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({}))
-  const sessionCode = process.env.APP_SESSION_CODE || "GOCH-2026"
-  const valueNum = Number(body?.value)
+  const body = (await req.json().catch(() => ({}))) as { value?: number; trackId?: string }
+  const value = body?.value
+  let trackId: string | undefined = body?.trackId
 
-  if (![1, -1].includes(valueNum)) {
-    return NextResponse.json({ error: "value must be +1 or -1" }, { status: 400 })
+  if (value !== 1 && value !== -1) {
+    return NextResponse.json({ error: "invalid vote value" }, { status: 400 })
   }
 
   const supa = getAdminSupabase()
-  if (!supa) return NextResponse.json({ error: "server supabase not configured" }, { status: 500 })
+  if (!supa) return NextResponse.json({ error: "supabase not configured" }, { status: 500 })
 
-  // TODO: Später echten Track aus now_playing lesen.
-  const trackId = "demo:now"
-
-  const { data, error } = await supa
-    .from("votes")
-    .insert({ session_code: sessionCode, track_spotify_id: trackId, value: valueNum })
-    .select()
-    .single()
-
-  if (error) {
-    console.error("[votes.insert]", error)
-    return NextResponse.json({ error: "insert vote failed" }, { status: 500 })
+  // Falls keine Track-ID mitkam: aus now_playing lesen
+  if (!trackId) {
+    const np = await supa
+      .from("now_playing")
+      .select("track_spotify_id")
+      .eq("session_code", sessionCode())
+      .single()
+    if (np.error) return NextResponse.json({ error: np.error.message }, { status: 500 })
+    trackId = (np.data as any)?.track_spotify_id
   }
 
-  return NextResponse.json({ status: "ok", vote: data })
+  if (!trackId) {
+    return NextResponse.json({ error: "no active track" }, { status: 400 })
+  }
+
+  const ins = await supa.from("votes").insert({
+    session_code: sessionCode(),
+    track_spotify_id: trackId,
+    value,
+  })
+
+  if (ins.error) return NextResponse.json({ error: ins.error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
 }

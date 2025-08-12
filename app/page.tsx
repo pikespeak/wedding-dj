@@ -33,6 +33,8 @@ export default function Page() {
   const [likeBusy, setLikeBusy] = useState<null | "up" | "down">(null)
   const [likes, setLikes] = useState(0)
   const [dislikes, setDislikes] = useState(0)
+  // Remember last Track-ID to detect real track changes
+  const lastTrackIdRef = useRef<string | null>(null)
 
   // Admin state
   const [adminOpen, setAdminOpen] = useState(false)
@@ -67,18 +69,9 @@ export default function Page() {
       const supa = getSupabase()
       if (!supa) return
 
-      // Prefer using current now-playing id; fallback to API
-      let trackId = now?.track_spotify_id
+      const trackId = now?.track_spotify_id
       if (!trackId) {
-        const res = await fetch("/api/now-playing", { cache: "no-store" })
-        if (res.ok) {
-          const j = await res.json()
-          if (j && j.track_spotify_id) trackId = j.track_spotify_id
-        }
-      }
-      if (!trackId) {
-        setLikes(0)
-        setDislikes(0)
+        // Keine ID – wir ändern die aktuellen Zähler NICHT, um Flackern zu vermeiden
         return
       }
 
@@ -99,6 +92,16 @@ export default function Page() {
       console.warn("[votes] summary failed", e)
     }
   }, [now])
+  // Wenn der Track wechselt, Zähler sanft zurücksetzen und neu laden
+  useEffect(() => {
+    const id = now?.track_spotify_id || null
+    if (id && id !== lastTrackIdRef.current) {
+      lastTrackIdRef.current = id
+      // Optional: kurz auf 0 setzen? Wir lassen die alten Werte stehen bis Fetch fertig ist, um Flackern zu vermeiden.
+      // setLikes(0); setDislikes(0)
+      fetchVotesSummary()
+    }
+  }, [now?.track_spotify_id, fetchVotesSummary])
 
   useEffect(() => {
     // Initial load
@@ -199,22 +202,38 @@ export default function Page() {
     }
   }
 
-  async function vote(value: 1 | -1) {
-    setLikeBusy(value === 1 ? "up" : "down")
-    try {
-      // Optimistic UI
-      if (value === 1) setLikes((n) => n + 1)
-      else setDislikes((n) => n + 1)
-
-      await fetch("/api/vote", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ value }),
-      })
-    } finally {
-      setLikeBusy(null)
-    }
+async function vote(value: 1 | -1) {
+  if (!now?.track_spotify_id) {
+    // Ohne Track-ID kein Vote – Anzeige unverändert lassen
+    return
   }
+  const trackId = now.track_spotify_id
+
+  setLikeBusy(value === 1 ? "up" : "down")
+  let rollback: (() => void) | null = null
+  try {
+    // Optimistic UI + Rollback-Helfer merken
+    if (value === 1) {
+      setLikes((n) => { rollback = () => setLikes(n); return n + 1 })
+    } else {
+      setDislikes((n) => { rollback = () => setDislikes(n); return n + 1 })
+    }
+
+    const res = await fetch("/api/vote", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ value, trackId }),
+    })
+
+    if (!res.ok) {
+      if (rollback) rollback() // zurücksetzen, wenn Server ablehnt
+      console.error("Vote fehlgeschlagen", await res.text().catch(() => ""))
+    }
+    // Erfolgsfall: Realtime-Sub triggert fetchVotesSummary automatisch.
+  } finally {
+    setLikeBusy(null)
+  }
+}
 
   // Admin: Spotify controls hitting our API routes
   async function adminPlay() {
@@ -236,7 +255,23 @@ export default function Page() {
     })
   }
 
-  function tryAdminLogin() {
+  async function adminResetVotes() {
+    await fetch("/api/admin/votes/reset", { method: "POST" })
+    await fetchVotesSummary()
+  }
+
+  async function adminResetAllVotes() {
+  const confirmed = window.confirm(
+    "Wirklich ALLE Votes dieser Session löschen? Das kann nicht rückgängig gemacht werden."
+  )
+  if (!confirmed) return
+  await fetch("/api/admin/votes/reset-all", { method: "POST" })
+  // UI sofort „auf Null“ bringen
+  setLikes(0)
+  setDislikes(0)
+  }
+ 
+function tryAdminLogin() {
     if (adminPin === "2046") {
       setIsAdmin(true)
       setAdminPin("") // PIN-Feld nach erfolgreichem Login leeren
@@ -441,7 +476,27 @@ export default function Page() {
                 </button>
               </div>
             </div>
-
+          <div className="mt-5">
+                <div className="mb-2 text-sm text-zinc-300">Votes</div>
+                <button
+                  onClick={adminResetVotes}
+                  className="w-full rounded-xl border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800"
+                >
+                  Votes zurücksetzen (aktueller Track)
+                </button>
+                <p className="mt-1 text-xs text-zinc-500">Setzt alle 👍/👎 für den gerade laufenden Track auf 0.</p>
+              </div>
+              <div className="mt-3">
+              <button
+                onClick={adminResetAllVotes}
+                className="w-full rounded-xl border border-rose-700 px-3 py-2 text-sm hover:bg-rose-900/20 text-rose-300"
+              >
+                Alle Votes der Session löschen
+              </button>
+              <p className="mt-1 text-xs text-zinc-500">
+                Löscht sämtliche 👍/👎 der aktuellen Session (alle Tracks).
+              </p>
+            </div>
             <div>
               <div className="mb-2 text-sm text-zinc-300">Spotify‑Device (Demo)</div>
               <input
