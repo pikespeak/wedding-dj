@@ -254,3 +254,18 @@ export async function pause() {
   await spotifyPut("https://api.spotify.com/v1/me/player/pause", access)
   return { ok: true }
 }
+
+/** Next (skip to next track) */
+export async function nextTrack() {
+  const access = await getAccessToken()
+  // Spotify: POST /v1/me/player/next -> 204 bei Erfolg
+  const res = await fetch("https://api.spotify.com/v1/me/player/next", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${access}` },
+  })
+  if (!res.ok && res.status !== 204) {
+    const text = await res.text().catch(() => "")
+    throw new Error(`spotify NEXT ${res.status}: ${text}`)
+  }
+  return { ok: true }
+}

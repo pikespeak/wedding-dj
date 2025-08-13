@@ -83,6 +83,31 @@ export default function Page() {
     }
   }, [])
 
+  // Persistenz-Helfer (Admin Playlist Auswahl)
+  const loadPersistedPlaylist = useCallback(async () => {
+    try {
+      const r = await fetch("/api/admin/playlist", { cache: "no-store" })
+      const j = await r.json().catch(() => ({}))
+      if (r.ok && typeof j.id === "string") {
+        setSelectedPlaylist(j.id || "")
+      }
+    } catch {
+      // silent
+    }
+  }, [])
+
+  const savePersistedPlaylist = useCallback(async (id: string) => {
+    try {
+      await fetch("/api/admin/playlist", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      })
+    } catch {
+      // silent
+    }
+  }, [])
+
   const remaining = useMemo(() => {
     if (!now) return ""
     const sec = Math.max(0, Math.floor(now.remaining_ms / 1000))
@@ -99,11 +124,29 @@ export default function Page() {
   }, [])
 
   const fetchQueue = useCallback(async () => {
-    try {
-      const res = await fetch("/api/queue", { cache: "no-store" })
-      if (res.ok) setQueue(await res.json())
-    } catch {}
-  }, [])
+  try {
+    const res = await fetch("/api/queue", { cache: "no-store" })
+    const j = await res.json().catch(() => ({}))
+    // /api/queue liefert { items: [...] }
+    const raw = Array.isArray(j.items) ? j.items : []
+
+    // UI erwartet spotifyId/title/artist/score/reason
+    const mapped = raw.map((it: any) => ({
+      spotifyId: it.uri || it.id || it.spotifyId,            // robust mappen
+      title: it.title || it.name || "",
+      artist: it.artist || it.artists || "",
+      duration_ms: typeof it.duration_ms === "number" ? it.duration_ms : undefined,
+      score: typeof it.score === "number" ? it.score : undefined,
+      reason: it.reason || undefined,
+      source: it.source || undefined,
+    }))
+
+    setQueue(mapped)  // <-- immer ein Array speichern
+  } catch (e) {
+    console.warn("[queue] fetch failed", e)
+    setQueue([])      // auf Array zurücksetzen, damit .map nicht crasht
+  }
+}, [])
 
   const fetchVotesSummary = useCallback(async () => {
     try {
@@ -213,9 +256,10 @@ export default function Page() {
   }, [fetchNow, fetchQueue, fetchVotesSummary, fetchPendingRequests])
   useEffect(() => {
     if (isAdmin && adminOpen) {
+      loadPersistedPlaylist()
       fetchPlaylists()
     }
-  }, [isAdmin, adminOpen, fetchPlaylists])
+  }, [isAdmin, adminOpen, fetchPlaylists, loadPersistedPlaylist])
   async function adminResolveWish(w: WishItem) {
     try {
       setPendingBusy(w.id)
@@ -321,18 +365,42 @@ async function vote(value: 1 | -1) {
   }
 }
 
-  // Admin: Spotify controls hitting our API routes
-  async function adminPlay() {
-    await fetch("/api/spotify/play", { method: "POST" })
+    async function adminPlay() {
+    try {
+      const r = await fetch("/api/spotify/play", { method: "POST" })
+      const j = await r.json().catch(() => ({}))
+      if (!j?.ok) {
+        alert("Play fehlgeschlagen. Öffne Spotify auf dem Zielgerät und versuche es erneut.")
+      }
+    } catch {
+      alert("Play fehlgeschlagen (Netzwerk)")
+    }
   }
+
   async function adminPause() {
-    await fetch("/api/spotify/pause", { method: "POST" })
+    try {
+      const r = await fetch("/api/spotify/pause", { method: "POST" })
+      const j = await r.json().catch(() => ({}))
+      if (!j?.ok) {
+        alert("Pause fehlgeschlagen. Ist ein aktives Spotify-Gerät vorhanden?")
+      }
+    } catch {
+      alert("Pause fehlgeschlagen (Netzwerk)")
+    }
   }
+
   async function adminSkip() {
-    await fetch("/api/admin/skip", { method: "POST" })
-    fetchNow()
-    fetchQueue()
+    try {
+      const r = await fetch("/api/spotify/skip", { method: "POST" })
+      const j = await r.json().catch(() => ({}))
+      if (!j?.ok) {
+        alert("Skip fehlgeschlagen. Öffne Spotify auf dem Zielgerät.")
+      }
+    } catch {
+      alert("Skip fehlgeschlagen (Netzwerk)")
+    }
   }
+
   async function adminTransfer() {
     await fetch("/api/spotify/transfer", {
       method: "POST",
@@ -426,6 +494,26 @@ function tryAdminLogin() {
                 <div className="mt-1 text-right text-xs text-zinc-400">
                   <span className="mr-2">👍 {likes}</span>
                   <span>👎 {dislikes}</span>
+                </div>
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    onClick={adminPlay}
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                  >
+                    ▶︎ Play
+                  </button>
+                  <button
+                    onClick={adminPause}
+                    className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-500"
+                  >
+                    ❚❚ Pause
+                  </button>
+                  <button
+                    onClick={adminSkip}
+                    className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500"
+                  >
+                    » Skip
+                  </button>
                 </div>
               </div>
             </div>
@@ -531,37 +619,14 @@ function tryAdminLogin() {
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Playback Controls */}
-            <div>
-              <div className="mb-2 text-sm text-zinc-300">Wiedergabe</div>
-              <div className="flex gap-2">
-                <button
-                  onClick={adminPlay}
-                  className="flex-1 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-                >
-                  ▶︎ Play
-                </button>
-                <button
-                  onClick={adminPause}
-                  className="flex-1 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500"
-                >
-                  ❚❚ Pause
-                </button>
-                <button
-                  onClick={adminSkip}
-                  className="flex-1 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500"
-                >
-                  » Skip
-                </button>
-              </div>
-              <div className="mt-2 text-right">
-                <button
-                  onClick={() => setIsAdmin(false)}
-                  className="rounded-lg border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800"
-                >
-                  Abmelden
-                </button>
-              </div>
+            {/* Admin: Abmelden */}
+            <div className="pt-2">
+              <button
+                onClick={() => setIsAdmin(false)}
+                className="w-full rounded-lg border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800"
+              >
+                Abmelden
+              </button>
             </div>
 
             {/* Votes */}
@@ -588,7 +653,7 @@ function tryAdminLogin() {
               <div className="flex items-center gap-2">
                 <select
                   value={selectedPlaylist}
-                  onChange={(e) => setSelectedPlaylist(e.target.value)}
+                  onChange={(e) => { const v = e.target.value; setSelectedPlaylist(v); savePersistedPlaylist(v); }}
                   className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
                 >
                   <option value="">— Keine —</option>
