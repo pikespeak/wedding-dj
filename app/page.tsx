@@ -27,6 +27,7 @@ export default function Page() {
   const clientIdRef = useRef<string>(Math.random().toString(36).slice(2))
   const [now, setNow] = useState<NowPlaying | null>(null)
   const [queue, setQueue] = useState<QueueItem[]>([])
+  const [queueUpdatedAt, setQueueUpdatedAt] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
 
   const [wish, setWish] = useState("")
@@ -35,6 +36,9 @@ export default function Page() {
   const [dislikes, setDislikes] = useState(0)
   // Remember last Track-ID to detect real track changes
   const lastTrackIdRef = useRef<string | null>(null)
+  // Throttle fürs Laden der Playlist-Tracks über /api/queue
+  const selectedPlaylistRef = useRef<string>("")
+  const lastPlaylistFetchRef = useRef<number>(0)
 
   // Admin state
   const [adminOpen, setAdminOpen] = useState(false)
@@ -48,28 +52,65 @@ export default function Page() {
 
   const [playlists, setPlaylists] = useState<UiPlaylist[]>([])
   const [selectedPlaylist, setSelectedPlaylist] = useState<string>("")
+  useEffect(() => {
+    selectedPlaylistRef.current = selectedPlaylist
+  }, [selectedPlaylist])
   const [plLoading, setPlLoading] = useState(false)
-
+  const [playlistsError, setPlaylistsError] = useState<string | null>(null)
+  const [plCooldown, setPlCooldown] = useState(0)
+  
   const [pending, setPending] = useState<WishItem[]>([])
   const [pendingBusy, setPendingBusy] = useState<string | null>(null)
   const fetchPlaylists = useCallback(async () => {
     try {
       setPlLoading(true)
+      setPlaylistsError(null)
       const res = await fetch("/api/spotify/playlists", { cache: "no-store" })
       const j = await res.json().catch(() => ({}))
       if (res.ok && Array.isArray(j.items)) {
-        setPlaylists(j.items as UiPlaylist[])
-        // falls ausgewählte Playlist nicht mehr existiert → leeren
-        if (selectedPlaylist && !(j.items as UiPlaylist[]).some((p) => p.id === selectedPlaylist)) {
-          setSelectedPlaylist("")
+        const items = j.items as UiPlaylist[]
+        setPlaylists(items)
+        if (j.error) setPlaylistsError(String(j.error))
+        if (j.error === "rate_limited") {
+          const ra = Number(j.retryAfter || 15)
+          const sec = Math.min(30, Math.max(10, Math.floor(ra)))
+          setPlCooldown(sec)
+        }
+        // Falls die bisher ausgewählte Playlist nicht mehr existiert, sauber leeren
+        setSelectedPlaylist((prev) => (prev && !items.some((p) => p.id === prev) ? "" : prev))
+      } else {
+        setPlaylists([])
+        setPlaylistsError(j?.error ? String(j.error) : "failed")
+        if (j?.error === "rate_limited") {
+          const ra = Number(j.retryAfter || 15)
+          const sec = Math.min(30, Math.max(10, Math.floor(ra)))
+          setPlCooldown(sec)
         }
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn("[spotify] playlists", e)
+      setPlaylists([])
+      setPlaylistsError(e?.message || "failed")
     } finally {
       setPlLoading(false)
     }
-  }, [selectedPlaylist])
+  }, [])
+  useEffect(() => {
+    if (plCooldown <= 0) return
+    const t = setInterval(() => {
+      setPlCooldown((s) => (s > 1 ? s - 1 : 0))
+    }, 1000)
+    return () => clearInterval(t)
+  }, [plCooldown])
+
+  useEffect(() => {
+  if (!queueUpdatedAt) return
+  const t = setInterval(() => {
+    // re-render nur fürs Label – keine API-Calls
+    setQueueUpdatedAt((v) => v)
+  }, 1000)
+  return () => clearInterval(t)
+  }, [queueUpdatedAt])
 
   const fetchPendingRequests = useCallback(async () => {
     try {
@@ -116,6 +157,22 @@ export default function Page() {
     return `${m}:${s}`
   }, [now])
 
+    const queueUpdatedAgo = useMemo(() => {
+    if (!queueUpdatedAt) return ""
+    const diff = Math.max(0, Math.floor((Date.now() - queueUpdatedAt) / 1000))
+    if (diff < 60) return `${diff}s`
+    const m = Math.floor(diff / 60)
+    const s = String(diff % 60).padStart(2, "0")
+    return `${m}:${s}min`
+  }, [queueUpdatedAt])
+
+  const throttleRemaining = useMemo(() => {
+    if (!selectedPlaylist) return 0
+    const diffMs = Date.now() - lastPlaylistFetchRef.current
+    const rem = 30_000 - diffMs
+    return rem > 0 ? Math.ceil(rem / 1000) : 0
+  }, [selectedPlaylist, queueUpdatedAt])
+
   const fetchNow = useCallback(async () => {
     try {
       const res = await fetch("/api/now-playing", { cache: "no-store" })
@@ -124,29 +181,50 @@ export default function Page() {
   }, [])
 
   const fetchQueue = useCallback(async () => {
-  try {
-    const res = await fetch("/api/queue", { cache: "no-store" })
-    const j = await res.json().catch(() => ({}))
-    // /api/queue liefert { items: [...] }
-    const raw = Array.isArray(j.items) ? j.items : []
+    // Wenn eine Ziel-Playlist gesetzt ist, nicht öfter als alle 30s laden
+    const sel = selectedPlaylistRef.current
+    if (sel) {
+      const now = Date.now()
+      if (now - lastPlaylistFetchRef.current < 30_000) {
+        return // zu früh – überspringen
+      }
+      lastPlaylistFetchRef.current = now
+    }
+    try {
+      const res = await fetch("/api/queue", { cache: "no-store" })
+      const j = await res.json().catch(() => ({}))
+      // /api/queue liefert { items: [...] }
+      const raw = Array.isArray(j.items) ? j.items : []
 
-    // UI erwartet spotifyId/title/artist/score/reason
-    const mapped = raw.map((it: any) => ({
-      spotifyId: it.uri || it.id || it.spotifyId,            // robust mappen
-      title: it.title || it.name || "",
-      artist: it.artist || it.artists || "",
-      duration_ms: typeof it.duration_ms === "number" ? it.duration_ms : undefined,
-      score: typeof it.score === "number" ? it.score : undefined,
-      reason: it.reason || undefined,
-      source: it.source || undefined,
-    }))
+      // UI erwartet spotifyId/title/artist/score/reason
+      const mapped = raw.map((it: any) => ({
+        spotifyId: it.uri || it.id || it.spotifyId,            // robust mappen
+        title: it.title || it.name || "",
+        artist: it.artist || it.artists || "",
+        duration_ms: typeof it.duration_ms === "number" ? it.duration_ms : undefined,
+        score: typeof it.score === "number" ? it.score : undefined,
+        reason: it.reason || undefined,
+        source: it.source || undefined,
+      }))
 
-    setQueue(mapped)  // <-- immer ein Array speichern
-  } catch (e) {
-    console.warn("[queue] fetch failed", e)
-    setQueue([])      // auf Array zurücksetzen, damit .map nicht crasht
-  }
-}, [])
+      setQueue(mapped)  // <-- immer ein Array speichern
+      setQueueUpdatedAt(Date.now())
+    } catch (e) {
+      console.warn("[queue] fetch failed", e)
+      setQueue([])      // auf Array zurücksetzen, damit .map nicht crasht
+      setQueueUpdatedAt(Date.now())
+    }
+  }, [])
+  // Alle 30s neu laden, wenn eine Ziel-Playlist gewählt ist
+  useEffect(() => {
+    if (!selectedPlaylist) return
+    // sofortiger Load, unabhängig vom Throttle-Zeitpunkt
+    fetchQueue()
+    const t = setInterval(() => {
+      fetchQueue()
+    }, 30_000)
+    return () => clearInterval(t)
+  }, [selectedPlaylist, fetchQueue])
 
   const fetchVotesSummary = useCallback(async () => {
     try {
@@ -259,7 +337,9 @@ export default function Page() {
       loadPersistedPlaylist()
       fetchPlaylists()
     }
-  }, [isAdmin, adminOpen, fetchPlaylists, loadPersistedPlaylist])
+    // intentionally omit fetchPlaylists from deps to avoid loops when selection changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, adminOpen, loadPersistedPlaylist])
   async function adminResolveWish(w: WishItem) {
     try {
       setPendingBusy(w.id)
@@ -550,7 +630,21 @@ function tryAdminLogin() {
 
         {/* Queue */}
         <section className="md:col-span-2 rounded-2xl border border-zinc-800 bg-zinc-950 p-5 shadow">
-          <h2 className="mb-3 text-lg font-semibold">Als Nächstes</h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Als Nächstes</h2>
+            <div className="flex items-center gap-3">
+              {queueUpdatedAt && (
+                <span className="text-xs text-zinc-500">Aktualisiert vor {queueUpdatedAgo}</span>
+              )}
+              <button
+                onClick={fetchQueue}
+                disabled={!!selectedPlaylist && throttleRemaining > 0}
+                className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {!!selectedPlaylist && throttleRemaining > 0 ? `In ${throttleRemaining}s` : "Jetzt aktualisieren"}
+              </button>
+            </div>
+          </div>
           {queue.length === 0 ? (
             <div className="text-zinc-400">Noch keine Einträge.</div>
           ) : (
@@ -663,15 +757,31 @@ function tryAdminLogin() {
                 </select>
                 <button
                   onClick={fetchPlaylists}
-                  disabled={plLoading}
+                  disabled={plLoading || plCooldown > 0}
                   className="rounded-lg border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800 disabled:opacity-50"
                 >
-                  {plLoading ? "Lädt…" : "Aktualisieren"}
+                  {plLoading ? "Lädt…" : plCooldown > 0 ? `Warten (${plCooldown}s)` : "Aktualisieren"}
                 </button>
               </div>
               <p className="mt-1 text-xs text-zinc-500">Wenn gesetzt, werden genehmigte Wünsche beim Übernehmen in diese Playlist hinzugefügt.</p>
             </div>
-
+            {playlistsError === "not_connected" ? (
+              <div className="mt-1 text-xs">
+                <span className="text-amber-400">Nicht mit Spotify verbunden.</span>{" "}
+                <a href="/api/spotify/login" className="underline">Jetzt verbinden</a>
+              </div>
+            ) : playlists.length === 0 ? (
+              <p className="mt-1 text-xs text-zinc-500">Keine Playlists gefunden.</p>
+            ) : (
+              <p className="mt-1 text-xs text-zinc-500">
+                Wenn gesetzt, werden genehmigte Wünsche beim Übernehmen in diese Playlist hinzugefügt.
+              </p>
+            )}
+            {playlistsError === "rate_limited" && (
+              <p className="mt-1 text-xs text-amber-400">
+                Spotify‑Rate‑Limit. Bitte kurz warten{plCooldown > 0 ? ` (${plCooldown}s)` : ""} und dann erneut „Aktualisieren“ drücken.
+              </p>
+            )}
             {/* Wünsche (offen) */}
             <div>
               <div className="mb-2 text-sm font-semibold text-zinc-200">Wünsche (offen)</div>
@@ -685,6 +795,21 @@ function tryAdminLogin() {
                         <div>
                           <div className="text-sm">{w.text}</div>
                           <div className="text-xs text-zinc-500">{w.guest_name || "Anonym"} • {new Date(w.created_at).toLocaleTimeString()}</div>
+                          {/* AI-Match Ergebnis anzeigen */}
+                          {(w.title || w.artist) ? (
+                            <div className="mt-1 text-xs">
+                              <span className="text-zinc-500">AI‑Match: </span>
+                              <span className="text-zinc-200">{w.title || "—"}</span>
+                              <span className="text-zinc-400"> — {w.artist || "Unbekannt"}</span>
+                              {typeof w.ai_confidence === "number" && (
+                                <span className="ml-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                                  {(w.ai_confidence * 100).toFixed(0)}%
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="mt-1 text-xs text-amber-400">AI‑Match noch nicht verfügbar…</div>
+                          )}
                         </div>
                         <div className="flex gap-2">
                           <button
@@ -703,9 +828,6 @@ function tryAdminLogin() {
                           </button>
                         </div>
                       </div>
-                      {typeof w.ai_confidence === "number" && (
-                        <div className="mt-1 text-xs text-zinc-500">AI‑Confidence: {(w.ai_confidence * 100).toFixed(0)}%</div>
-                      )}
                     </li>
                   ))}
                 </ul>
