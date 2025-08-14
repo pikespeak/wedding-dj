@@ -7,7 +7,7 @@ import { getRefreshToken, refreshAccessToken, saveRefreshToken } from "@/lib/spo
 async function getAccessTokenOrThrow(): Promise<string> {
   const rt = await getRefreshToken()
   if (!rt) throw new Error("not_connected")
-  const t = await refreshAccessToken(rt)
+  const t = await refreshAccessToken()
   if ((t as any)?.refresh_token) {
     // falls Spotify einen neuen Refresh-Token liefert
     await saveRefreshToken((t as any).refresh_token)

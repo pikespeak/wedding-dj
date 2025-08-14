@@ -45,7 +45,7 @@ export async function POST(req: Request) {
   if (ins.error) return NextResponse.json({ error: ins.error.message }, { status: 500 })
 
   // Fire-and-forget: AI-Resolver im Hintergrund
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://127.0.0.1:3000"
   fetch(`${baseUrl}/api/dj/resolve-task`, {
     method: "POST",
     headers: { "content-type": "application/json" },

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { openai } from "@/lib/openai"
 import { searchTop5 } from "@/lib/spotify.search"
 
@@ -132,16 +133,16 @@ export async function resolveWishWithAI(inputText: string) {
       {
         type: "function",
         name: "search_spotify",
-        description:
-          "Suche in Spotify nach einem Song. Rückgabe: Top-5 Kandidaten mit id, title, artist, year, popularity.",
+        strict: true, // <— wichtig für das neue SDK
+        description: "Find top matching Spotify tracks for a natural-language query",
         parameters: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Suchstring: artist + title + evtl. year" },
+            query: { type: "string", description: "User wish text (song/artist/etc.)" }
           },
           required: ["query"],
-          additionalProperties: false,
-        },
+          additionalProperties: false
+        }
       },
     ],
     tool_choice: { type: "function", name: "search_spotify" },
@@ -151,27 +152,33 @@ export async function resolveWishWithAI(inputText: string) {
   const toolCalls = (resp1.output ?? []).filter((c: any) => c.type === "tool_call")
   if (toolCalls.length) {
     const toolOutputs: Array<{ tool_call_id: string; output: string }> = []
-    for (const call of toolCalls) {
-      if (call.name === "search_spotify") {
+    for (const call of toolCalls as any[]) {
+      const name = (call as any)?.name
+      const toolCallId = String((call as any)?.id ?? "")
+      if (!toolCallId) continue
+
+      if (name === "search_spotify") {
         try {
-          const args = JSON.parse(call.arguments ?? "{}")
+          const rawArgs = (call as any)?.arguments
+          const args = typeof rawArgs === "string" ? JSON.parse(rawArgs || "{}") : (rawArgs ?? {})
           const q = String(args.query || "").trim()
-          // 1. Modell-Query
+
+          // 1) Direkt mit der vom Modell vorgeschlagenen Query suchen
           let items = q ? await searchTop5(q) : []
-          // 2. Eigene Heuristiken, falls schwache Kandidaten
+
+          // 2) Falls leer/unklar: zusätzliche Heuristik-Queries versuchen
           if (!items?.length) {
             const extra: any[] = []
             for (const v of generateQueries(inputText)) {
               const r = await searchTop5(v)
               extra.push(...r)
             }
-            // dedupe
-            const dedup = uniqueByUri(extra as any)
-            items = dedup
+            items = uniqueByUri(extra as any)
           }
-          toolOutputs.push({ tool_call_id: call.id, output: JSON.stringify({ items }) })
+
+          toolOutputs.push({ tool_call_id: toolCallId, output: JSON.stringify({ items }) })
         } catch {
-          toolOutputs.push({ tool_call_id: call.id, output: JSON.stringify({ items: [] }) })
+          toolOutputs.push({ tool_call_id: toolCallId, output: JSON.stringify({ items: [] }) })
         }
       }
     }

@@ -12,9 +12,14 @@ type Args = {
 /** Realtime subscribe helper (client) */
 export function subscribeTable({ table, event = "*", filter, onEvent }: Args) {
   const supa = getSupabase()
+  if (!supa) {
+    // Kein Client verfügbar (sollte im Browser nicht passieren)
+    return () => {}
+  }
+
   const channel = supa
     .channel(`realtime:${table}`)
-    // Die Typen des Pakets sind je nach Version wackelig – daher TS-Ignore:
+    // Types des Pakets variieren je nach Version – daher TS‑Ignore:
     // @ts-expect-error Supabase typings mismatch in this version
     .on("postgres_changes", { event, schema: "public", table, filter }, (payload: any) => {
       onEvent({

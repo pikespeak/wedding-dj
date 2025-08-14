@@ -23,6 +23,15 @@ type NowPlaying = {
   remaining_ms: number
 }
 
+// kleines Debounce, um Realtime-Bursts zu glätten
+function debounce<T extends (...args: any[]) => any>(fn: T, delay = 250) {
+  let t: any
+  return (...args: Parameters<T>) => {
+    clearTimeout(t)
+    t = setTimeout(() => fn(...args), delay)
+  }
+}
+
 export default function Page() {
   const clientIdRef = useRef<string>(Math.random().toString(36).slice(2))
   const [now, setNow] = useState<NowPlaying | null>(null)
@@ -39,6 +48,8 @@ export default function Page() {
   // Throttle fürs Laden der Playlist-Tracks über /api/queue
   const selectedPlaylistRef = useRef<string>("")
   const lastPlaylistFetchRef = useRef<number>(0)
+  // Rollback-Ref für optimistisches Voting
+  const voteRollbackRef = useRef<null | (() => void)>(null)
 
   // Admin state
   const [adminOpen, setAdminOpen] = useState(false)
@@ -215,6 +226,9 @@ export default function Page() {
       setQueueUpdatedAt(Date.now())
     }
   }, [])
+  // Debounced Varianten für Realtime-Events
+  const fetchNowDebounced = useMemo(() => debounce(fetchNow, 250), [fetchNow])
+  const fetchQueueDebounced = useMemo(() => debounce(fetchQueue, 250), [fetchQueue])
   // Alle 30s neu laden, wenn eine Ziel-Playlist gewählt ist
   useEffect(() => {
     if (!selectedPlaylist) return
@@ -283,19 +297,14 @@ export default function Page() {
         table: "queue",
         event: "*",
         filter: `session_code=eq.${sessionCode()}`,
-        onEvent: () => {
-          fetchQueue()
-        },
+        onEvent: () => { fetchQueueDebounced() },
       })
 
       unsubNow = subscribeTable({
         table: "now_playing",
         event: "*",
         filter: `session_code=eq.${sessionCode()}`,
-        onEvent: () => {
-          fetchNow()
-          fetchVotesSummary()
-        },
+        onEvent: () => { fetchNowDebounced(); fetchVotesSummary() },
       })
 
       unsubVotes = subscribeTable({
@@ -331,7 +340,7 @@ export default function Page() {
       unsubVotes()
       unsubRequests()
     }
-  }, [fetchNow, fetchQueue, fetchVotesSummary, fetchPendingRequests])
+  }, [fetchNow, fetchQueue, fetchVotesSummary, fetchPendingRequests, fetchNowDebounced, fetchQueueDebounced])
   useEffect(() => {
     if (isAdmin && adminOpen) {
       loadPersistedPlaylist()
@@ -381,8 +390,7 @@ export default function Page() {
         const j = await claim.json().catch(() => ({}))
         if (j?.leader) {
           await fetch("/api/spotify/sync-now-playing", { method: "POST" })
-          // nach erfolgreichem Sync Now-Playing lokal aktualisieren
-          await fetchNow()
+          // Realtime-Event aktualisiert alle Clients; kein direktes fetchNow() nötig
         }
       } catch {
         // still silent
@@ -412,38 +420,53 @@ export default function Page() {
     }
   }
 
-async function vote(value: 1 | -1) {
-  if (!now?.track_spotify_id) {
-    // Ohne Track-ID kein Vote – Anzeige unverändert lassen
-    return
-  }
-  const trackId = now.track_spotify_id
-
-  setLikeBusy(value === 1 ? "up" : "down")
-  let rollback: (() => void) | null = null
-  try {
-    // Optimistic UI + Rollback-Helfer merken
-    if (value === 1) {
-      setLikes((n) => { rollback = () => setLikes(n); return n + 1 })
-    } else {
-      setDislikes((n) => { rollback = () => setDislikes(n); return n + 1 })
+  async function vote(value: 1 | -1) {
+    if (!now?.track_spotify_id) {
+      // Ohne Track-ID kein Vote – Anzeige unverändert lassen
+      return
     }
+    const trackId = now.track_spotify_id
 
-    const res = await fetch("/api/vote", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ value, trackId }),
-    })
+    setLikeBusy(value === 1 ? "up" : "down")
 
-    if (!res.ok) {
-      if (rollback) rollback() // zurücksetzen, wenn Server ablehnt
-      console.error("Vote fehlgeschlagen", await res.text().catch(() => ""))
+    // Ref vor jedem Vote zurücksetzen
+    voteRollbackRef.current = null
+
+    try {
+      // Optimistic UI + Rollback in Ref speichern
+      if (value === 1) {
+        setLikes((n) => {
+          const prev = n
+          voteRollbackRef.current = () => setLikes(prev)
+          return n + 1
+        })
+      } else {
+        setDislikes((n) => {
+          const prev = n
+          voteRollbackRef.current = () => setDislikes(prev)
+          return n + 1
+        })
+      }
+
+      const res = await fetch("/api/vote", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value, trackId }),
+      })
+
+      if (!res.ok) {
+        // Rollback ausführen, wenn Server ablehnt
+        const rb = voteRollbackRef.current
+        if (typeof rb === "function") rb()
+        console.error("Vote fehlgeschlagen", await res.text().catch(() => ""))
+      }
+      // Erfolgsfall: Realtime-Sub triggert fetchVotesSummary automatisch.
+    } finally {
+      setLikeBusy(null)
+      // Rollback-Ref aufräumen
+      voteRollbackRef.current = null
     }
-    // Erfolgsfall: Realtime-Sub triggert fetchVotesSummary automatisch.
-  } finally {
-    setLikeBusy(null)
   }
-}
 
     async function adminPlay() {
     try {
@@ -677,8 +700,8 @@ function tryAdminLogin() {
         </div>
       )}
       <div
-        className={`fixed right-0 top-0 h-full w-full max-w-sm transform border-l border-zinc-800 bg-zinc-950 p-5 shadow-2xl transition-transform duration-200 z-50 ${
-          adminOpen ? "translate-x-0" : "translate-x-full"
+        className={`fixed right-0 top-0 h-full max-h-screen w-full max-w-sm overflow-y-auto overscroll-contain transform border-l border-zinc-800 bg-zinc-950 p-5 pb-6 shadow-2xl transition-transform duration-200 z-50 ${
+        adminOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
         <div className="mb-4 flex items-center justify-between">
@@ -871,12 +894,42 @@ function tryAdminLogin() {
                   >
                     Status prüfen
                   </button>
-                  <a
-                    href="/api/spotify/login"
-                    className="rounded-lg border border-indigo-700 bg-indigo-900/30 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/40"
+                 <button
+  onClick={() => { window.location.href = "/api/spotify/login?force=1" }}
+  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-white"
+>
+  Mit Spotify verbinden
+</button>
+                  <button
+  onClick={() => { window.location.href = "/api/spotify/login?force=1" }}
+  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-white hover:bg-emerald-500"
+>
+  Mit Spotify verbinden (erzwingen)
+</button>
+                  <button
+                    onClick={async () => {
+                      const ok = window.confirm("Spotify-Verbindung trennen? Du kannst dich später wieder verbinden.")
+                      if (!ok) return
+                      try {
+                        const r = await fetch("/api/spotify/connect", { method: "DELETE" })
+                        const j = await r.json().catch(() => ({} as any))
+                        if (r.ok && j?.ok) {
+                          // UI zurücksetzen
+                          setSelectedPlaylist("")
+                          setPlaylists([])
+                          setPlaylistsError("not_connected")
+                          alert("Spotify-Verbindung wurde getrennt.")
+                        } else {
+                          alert("Trennen fehlgeschlagen. Versuche es erneut.")
+                        }
+                      } catch {
+                        alert("Trennen fehlgeschlagen (Netzwerk)")
+                      }
+                    }}
+                    className="rounded-lg border border-rose-700 bg-rose-900/30 px-3 py-1.5 text-rose-200 hover:bg-rose-900/40"
                   >
-                    Spotify verbinden
-                  </a>
+                    Spotify trennen
+                  </button>
                 </div>
 
                 <div className="text-sm text-zinc-300">Geräte laden</div>

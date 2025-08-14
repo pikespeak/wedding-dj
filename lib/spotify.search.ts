@@ -34,7 +34,7 @@ type TrackLite = {
 async function getAccessToken(): Promise<string> {
   const rt = await getRefreshToken()
   if (!rt) throw new Error("no refresh token saved")
-  const t = await refreshAccessToken(rt)
+  const t = await refreshAccessToken()
   if ((t as any)?.refresh_token) {
     await saveRefreshToken((t as any).refresh_token)
   }
