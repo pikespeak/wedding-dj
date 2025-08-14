@@ -32,13 +32,34 @@ function debounce<T extends (...args: any[]) => any>(fn: T, delay = 250) {
   }
 }
 
+// kleines Throttle, um Event-Stürme zu begrenzen
+function throttle<T extends (...args: any[]) => any>(fn: T, wait = 800) {
+  let last = 0
+  let timer: any
+  return (...args: Parameters<T>) => {
+    const nowTs = Date.now()
+    const remaining = wait - (nowTs - last)
+    if (remaining <= 0) {
+      last = nowTs
+      fn(...args)
+    } else {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        last = Date.now()
+        fn(...args)
+      }, remaining)
+    }
+  }
+}
+
 export default function Page() {
   const clientIdRef = useRef<string>(Math.random().toString(36).slice(2))
   const [now, setNow] = useState<NowPlaying | null>(null)
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [queueUpdatedAt, setQueueUpdatedAt] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
-
+  const didSubRef = useRef(false)
+  const unsubsRef = useRef<Array<() => void>>([])
   const [wish, setWish] = useState("")
   const [likeBusy, setLikeBusy] = useState<null | "up" | "down">(null)
   const [likes, setLikes] = useState(0)
@@ -50,6 +71,7 @@ export default function Page() {
   const lastPlaylistFetchRef = useRef<number>(0)
   // Rollback-Ref für optimistisches Voting
   const voteRollbackRef = useRef<null | (() => void)>(null)
+  const didInitialFetchRef = useRef(false)
 
   // Admin state
   const [adminOpen, setAdminOpen] = useState(false)
@@ -229,6 +251,7 @@ export default function Page() {
   // Debounced Varianten für Realtime-Events
   const fetchNowDebounced = useMemo(() => debounce(fetchNow, 250), [fetchNow])
   const fetchQueueDebounced = useMemo(() => debounce(fetchQueue, 250), [fetchQueue])
+  const fetchPendingThrottled = useMemo(() => throttle(fetchPendingRequests, 800), [fetchPendingRequests])
   // Alle 30s neu laden, wenn eine Ziel-Playlist gewählt ist
   useEffect(() => {
     if (!selectedPlaylist) return
@@ -279,68 +302,72 @@ export default function Page() {
     }
   }, [now?.track_spotify_id, fetchVotesSummary])
 
+  // Initial Load — StrictMode-sicher nur einmal
   useEffect(() => {
-    // Initial load
+    if (didInitialFetchRef.current) return
+    didInitialFetchRef.current = true
     fetchNow()
     fetchQueue()
     fetchVotesSummary()
     fetchPendingRequests()
+  }, [fetchNow, fetchQueue, fetchVotesSummary, fetchPendingRequests])
 
-    // Realtime subscriptions
-    let unsubQueue = () => {}
-    let unsubNow = () => {}
-    let unsubVotes = () => {}
-    let unsubRequests = () => {}
+  // Realtime-Subscriptions — StrictMode-sicher nur einmal und sauber aufräumen
+  useEffect(() => {
+    if (didSubRef.current) return
+    didSubRef.current = true
+
+    // vorhandene Abos (Hot-Reload) schließen
+    unsubsRef.current.forEach((fn) => { try { fn() } catch {} })
+    unsubsRef.current = []
 
     try {
-      unsubQueue = subscribeTable({
+      const uQueue = subscribeTable({
         table: "queue",
         event: "*",
         filter: `session_code=eq.${sessionCode()}`,
         onEvent: () => { fetchQueueDebounced() },
       })
 
-      unsubNow = subscribeTable({
+      const uNow = subscribeTable({
         table: "now_playing",
         event: "*",
         filter: `session_code=eq.${sessionCode()}`,
         onEvent: () => { fetchNowDebounced(); fetchVotesSummary() },
       })
 
-      unsubVotes = subscribeTable({
+      const uVotes = subscribeTable({
         table: "votes",
         event: "*",
         filter: `session_code=eq.${sessionCode()}`,
-        onEvent: () => {
-          fetchVotesSummary()
-        },
+        onEvent: () => { fetchVotesSummary() },
       })
 
-      unsubRequests = subscribeTable({
+      const uReq = subscribeTable({
         table: "requests",
         event: "*",
         filter: `session_code=eq.${sessionCode()}`,
-        onEvent: () => {
-          fetchPendingRequests()
-        },
+        onEvent: () => { fetchPendingThrottled() },
       })
+
+      unsubsRef.current = [uQueue, uNow, uVotes, uReq]
     } catch (e) {
       console.warn("[realtime] subscribe failed — fallback to polling", e)
       const t = setInterval(() => {
         fetchNow()
         fetchQueue()
         fetchVotesSummary()
+        fetchPendingRequests()
       }, 4000)
       return () => clearInterval(t)
     }
 
     return () => {
-      unsubQueue()
-      unsubNow()
-      unsubVotes()
-      unsubRequests()
+      unsubsRef.current.forEach((fn) => { try { fn() } catch {} })
+      unsubsRef.current = []
+      didSubRef.current = false
     }
-  }, [fetchNow, fetchQueue, fetchVotesSummary, fetchPendingRequests, fetchNowDebounced, fetchQueueDebounced])
+  }, [fetchNow, fetchQueue, fetchVotesSummary, fetchPendingRequests, fetchNowDebounced, fetchQueueDebounced, fetchPendingThrottled])
   useEffect(() => {
     if (isAdmin && adminOpen) {
       loadPersistedPlaylist()

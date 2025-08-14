@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3000",
+    "dev:https": "local-ssl-proxy --source 3443 --target 3000 --cert ./127.0.0.1+1.pem --key ./127.0.0.1+1-key.pem",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
@@ -27,6 +28,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.4.6",
     "eslint-config-prettier": "^10.1.8",
+    "local-ssl-proxy": "^2.0.5",
     "postcss": "^8.5.6",
     "prettier": "^3.6.2",
     "tailwindcss": "^4.1.11",

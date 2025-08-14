@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server"
 import { exchangeCodeForTokens, saveRefreshToken } from "@/lib/spotify"
-import { absoluteUrl } from "@/lib/runtimeUrl"
+import { absoluteUrl } from "@/lib/runtimeUrl"   // <— wichtig
 import { cookies } from "next/headers"
 
 export async function GET(req: Request) {
   const backOk  = absoluteUrl(req, "/?spotify=connected")
   const backErr = (m: string) => absoluteUrl(req, "/?spotify_error=" + encodeURIComponent(m))
-
+  const redirectUri = absoluteUrl(req, "/api/spotify/callback")
   const { searchParams } = new URL(req.url)
   const code  = searchParams.get("code")
   const error = searchParams.get("error")
